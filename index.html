@@ -1537,10 +1537,31 @@ const apiDot=document.getElementById('api-dot');
 const apiKeyInput=document.getElementById('api-key-input');
 apiToggle.addEventListener('click',()=>apiConfig.classList.toggle('show'));
 document.getElementById('api-close-btn').addEventListener('click',()=>apiConfig.classList.remove('show'));
-document.getElementById('api-save-btn').addEventListener('click',()=>{
+document.getElementById('api-save-btn').addEventListener('click',async()=>{
   API_KEY=apiKeyInput.value.trim();
-  apiDot.className='api-status-dot '+(API_KEY?'on':'off');
-  apiConfig.classList.remove('show');
+  if(!API_KEY){apiDot.className='api-status-dot off';apiConfig.classList.remove('show');return}
+  // Test the key
+  apiDot.className='api-status-dot off';
+  try{
+    const res=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-api-key':API_KEY,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+      body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:10,messages:[{role:'user',content:'hi'}]})
+    });
+    const data=await res.json();
+    if(data.error){
+      apiDot.className='api-status-dot off';
+      alert('API Key 无效: '+(data.error.message||'请检查Key'));
+      API_KEY='';
+    } else {
+      apiDot.className='api-status-dot on';
+      apiConfig.classList.remove('show');
+    }
+  }catch(e){
+    apiDot.className='api-status-dot off';
+    alert('无法连接API: '+e.message+'\n\n如果在本地部署，请确认浏览器允许跨域请求。');
+    API_KEY='';
+  }
 });
 function hasAPI(){return !!API_KEY}
 async function callAPI(system,messages,maxTok=1000){
@@ -1548,12 +1569,27 @@ async function callAPI(system,messages,maxTok=1000){
   agentCalls++;
   try{
     const res=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',headers:{'Content-Type':'application/json','x-api-key':API_KEY,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'x-api-key':API_KEY,
+        'anthropic-version':'2023-06-01',
+        'anthropic-dangerous-direct-browser-access':'true'
+      },
       body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:maxTok,system,messages})
     });
     const data=await res.json();
-    return data.content?.map(c=>c.text||'').join('')||null;
-  }catch(e){return null}
+    // Check for API errors
+    if(data.error){
+      console.error('API Error:',data.error.message||data.error);
+      return null;
+    }
+    const text=data.content?.map(c=>c.text||'').join('');
+    return text||null;
+  }catch(e){
+    console.error('API Call Failed:',e);
+    return null;
+  }
 }
 
 // ============ MULTI-AGENT ============
@@ -1694,7 +1730,7 @@ async function sendChat(){
   const t=chatIn.value.trim();if(!t)return;
   const isPreset=!!chatDemoResponses[t];
 
-  // Non-preset without API → prompt
+  // No API and not a preset → prompt to connect
   if(!isPreset&&!hasAPI()){
     chatIn.value='';
     const tip=document.createElement('div');tip.className='msg ai';
@@ -1708,7 +1744,12 @@ async function sendChat(){
   const u=document.createElement('div');u.className='msg user';u.textContent=t;chatMsgs.appendChild(u);chatMsgs.scrollTop=chatMsgs.scrollHeight;interactions++;
   const typ=document.createElement('div');typ.className='msg ai';typ.innerHTML='<div class="typing-dots"><span></span><span></span><span></span></div>';chatMsgs.appendChild(typ);chatMsgs.scrollTop=chatMsgs.scrollHeight;
 
-  let reply=await callAPI('你是"鹿同学"的AI分身，部署在他的个人能力展示页上。你就是鹿同学本人的数字化身，不是任何其他AI。绝对不要提到Claude、Anthropic或任何AI公司名称。回答时以第一人称"我"代表鹿同学。简洁有力，不超3句。兼具技术深度和审美品位。中英文混用保持极客感。如果被问到这个页面，强调是多Agent协作+零模板+纯AI构建。如果被问你是谁，说"我是鹿同学的AI分身，一个用AI武装到牙齿的builder"。',[{role:'user',content:t}]);
+  let reply=null;
+  // Always try API first if key is set
+  if(hasAPI()){
+    reply=await callAPI('你是"鹿同学"的AI分身，部署在他的个人能力展示页上。你就是鹿同学本人的数字化身，不是任何其他AI。绝对不要提到Claude、Anthropic或任何AI公司名称。回答时以第一人称"我"代表鹿同学。简洁有力，不超3句。兼具技术深度和审美品位。中英文混用保持极客感。如果被问到这个页面，强调是多Agent协作+零模板+纯AI构建。如果被问你是谁，说"我是鹿同学的AI分身，一个用AI武装到牙齿的builder"。',[{role:'user',content:t}]);
+  }
+  // Fallback to demo if API failed or no key
   if(!reply){
     await sleep(600+Math.random()*400);
     reply=chatDemoResponses[t]||chatDemoResponses['default'];
